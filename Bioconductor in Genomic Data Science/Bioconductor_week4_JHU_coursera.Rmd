@@ -1,0 +1,255 @@
+---
+title: "Bioconductor_week4_coursera_JHU"
+author: "Asude Berber"
+date: "2024-07-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("yeastRNASeq")
+#The ShortRead package was one of the first Bioconductor packages to deal with low-level analysis of high-throughput sequencing data.
+library(ShortRead)
+#Paired-end reads 
+```
+```{r}
+fastqDir <- system.file("extdata", "E-MTAB-1147", package = "ShortRead")
+fastqPath <- list.files(fastqDir, pattern = ".fastq.gz$", full = TRUE)[1]
+reads <- readFastq(fastqPath)
+reads
+
+fqFile <- FastqFile(fastqPath)
+fqFile
+reads <- readFastq(fqFile)
+sread(reads)[1:2]
+#The ShortReadQ class is very similar to a DNAStringSet but it has two sets of strings: one for the read nucleotides and one for the base qualities. 
+quality(reads)[1:2]
+id(reads)[1:2]
+
+```
+```{r}
+library(Rsamtools)
+#The Rsamtools packages contains functionality for reading and examining aligned reads in the BAM format.
+#scanbam function 
+bamPath <- system.file("extdata", "ex1.bam", package="Rsamtools")
+bamFile <- BamFile(bamPath)
+bamFile
+
+seqinfo(bamFile)
+
+yieldSize(bamFile) <- 1
+open(bamFile)
+scanBam(bamFile)[[1]]$seq
+
+scanBam(bamFile)[[1]]$seq
+```
+
+
+#Questionss
+#Question: What fraction of reads in this file has an A nucleotide in the 5th base of the read?
+
+```{r}
+library(yeastRNASeq)
+fastqFilePath <- system.file("reads", "wt_1_f.fastq.gz", package = "yeastRNASeq")
+
+library(ShortRead)
+library(Biostrings)
+
+# read fastq file
+reads <- readFastq(fastqFilePath)
+DNAStringSet <- sread(reads)
+
+# fraction of reads has an A in the 5th base
+cm <- consensusMatrix(DNAStringSet, as.prob=TRUE, baseOnly=TRUE)
+cm['A', 5]
+```
+
+#Question
+#Question: What is the average numeric quality value of the 5th base of these reads?
+```{r}
+mean(as(quality(reads), "matrix")[,5])
+```
+
+#Question 3
+#We will focus on the interval from 800,000 to 801,000 on yeast chromosome 13.
+#Question: In this interval, how many reads are duplicated by position?
+```{r}
+library(leeBamViews)
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("oligo")
+bamFilePath <- system.file("bam", "isowt5_13e.bam", package="leeBamViews")
+
+library(Rsamtools)
+
+bamFile <- BamFile(bamFilePath)
+
+# focus on Scchr13, interval from 800,000 to 801,000
+gr <- GRanges(seqnames = "Scchr13", ranges = IRanges(start = c(800000), end = c(801000)))
+params <- ScanBamParam(which = gr, what = scanBamWhat())
+aln <- scanBam(bamFile, param = params)
+
+# find duplicates
+sum(table(aln[[1]]$pos)) - sum(table(aln[[1]]$pos) == 1)
+```
+
+#Question
+```{r}
+bpaths <- list.files(system.file("bam", package="leeBamViews"), pattern = "bam$", full=TRUE)
+#What is the average number of reads across the 8 samples falling in this interval?
+# focus on the novel transcribed regions
+bamView <- BamViews(bpaths)
+gr_nt <- GRanges(seqnames="Scchr13", ranges=IRanges(start = c(807762), end = c(808068)))
+bamRanges(bamView) <- gr_nt
+aln_nt <- scanBam(bamView)
+
+# get sequences for each sample
+alns <- lapply(aln_nt, function(xx) xx[[1]]$seq)
+
+# calculate the average number of reads across 8 the samples
+alns_len_sum = 0
+for (i in 1:length(alns)){
+  alns_len_sum = alns_len_sum + length(alns[i][[1]])
+}
+alns_len_sum / length(alns)
+```
+
+
+#Question 5
+#In the lecture on the oligo package an ExpressionSet with 18 samples is constructed, representing normalized data from an Affymetrix gene expression microarray. The samples are divided into two groups given by the group group variable.
+#Question: What is the average expression across samples in the control group for the “8149273” probeset (this is a character identifier, not a row number).
+
+```{r}
+library(oligo)
+library(GEOquery)
+
+# get data
+getGEOSuppFiles("GSE38792")
+untar("GSE38792/GSE38792_RAW.tar", exdir = "GSE38792/CEL")
+
+# read data
+celfiles <- list.files("GSE38792/CEL", full = TRUE)
+rawData <- read.celfiles(celfiles)
+
+# parse pData
+filename <- sampleNames(rawData)
+pData(rawData)$filename <- filename
+sampleNames <- sub(".*_", "", filename)
+sampleNames <- sub(".CEL.gz$", "", sampleNames)
+sampleNames(rawData) <- sampleNames
+pData(rawData)$group <- ifelse(grepl("^OSA", sampleNames(rawData)), "OSA", "Control")
+
+# find "8149273" probeset
+normData <- rma(rawData)
+loc <- match("8149273", rownames(normData))
+```
+```{r}
+# average expression in control group
+mean(exprs(normData[loc,])[1:8])
+```
+
+#Use the limma package to fit a two group comparison between the control group and the OSA group, and borrow strength across the genes using eBayes(). Include all 18 samples in the model fit.  
+#Question: What is the absolute value of the log foldchange (logFC) of the gene with the lowest P.value.
+
+```{r}
+library(limma)
+
+# use limma to fit between control group and OSA group
+normData$group <- factor(normData$group)
+design <- model.matrix(~normData$group)
+fit <- lmFit(normData, design)
+fit <- eBayes(fit)
+
+# absolute value of logFC which has lowest P.value
+abs(topTable(fit)$logFC[1])
+```
+
+
+#Question: How many genes are differentially expressed between the two groups at an adj.P.value cutoff of 0.05?
+```{r}
+fit_toptable <- topTable(fit)
+de <- subset(fit_toptable, adj.P.Val < 0.05)
+de
+```
+
+
+```{r}
+##### 8. An example 450k dataset is contained in the minfiData package. This dataset contains 6 samples; 3 cancer and 3 normals. Cancer has been shown to be globally hypo-methylated (less methylated) compared to normal tissue of the same kind.  
+
+##### Take the RGsetEx dataset in this package and preprocess it with the preprocessFunnorm function. For each sample, compute the average Beta value (percent methylation) across so-called OpenSea loci.  
+
+##### Question: What is the mean difference in beta values between the 3 normal samples and the 3 cancer samples, across OpenSea CpGs?
+
+```{r message=FALSE, warning=FALSE}
+library(minfi)
+library(minfiData)
+
+# get OpenSea loci in RGsetEx with preprocess
+rgSet <- preprocessFunnorm((RGsetEx), useNames = FALSE)
+rg_opensea <- rgSet[c(getIslandStatus(rgSet) == "OpenSea")]
+
+# get Beta value in both group
+rg_beta <- getBeta(rg_opensea)
+normal <- mean(rg_beta[, c(1,2,5)])
+cancer <- mean(rg_beta[, c(3,4,6)])
+
+# mean difference between normal and cancer group
+normal - cancer
+```
+
+
+##### 9. The Caco2 cell line is a colon cancer cell line profiled by ENCODE. Obtain the narrowPeak DNase hyper sensitive sites computed by the analysis working group (AWG).  
+
+##### Question: How many of these DNase hypersensitive sites contain one or more CpGs on the 450k array?
+
+```{r message=FALSE, warning=FALSE}
+library(AnnotationHub)
+
+# get Caco2 data
+ah <- AnnotationHub()
+ah <- subset(ah, species=="Homo sapiens")
+ah_Caco2 <- query(ah, c("Caco2", "AWG"))
+ah_Caco2 <- ah_Caco2[["AH22442"]]
+
+CpG_450K <- granges(rgSet)
+
+unique(findOverlaps(CpG_450K, ah_Caco2, type="within"))
+```
+
+##### 10. The zebrafishRNASeq package contains summarized data from an RNA-seq experiment in zebrafish in the form of a data.frame called zfGenes. The experiment compared 3 control samples to 3 treatment samples. Each row is a transcript; the data.frame contains 92 rows with spikein transcripts; these have a rowname starting with “ERCC”. Exclude these rows from the analysis.  
+
+##### Use DESeq2 to perform a differential expression analysis between control and treatment. Do not discard (filter) genes and use the padj results output as the p-value.  
+
+##### Question: How many features are differentially expressed between control and treatment (ie. padj<=0.05)?
+```{r message=FALSE, warning=FALSE}
+library(DESeq2)
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("zebrafishRNASeq")
+
+library(zebrafishRNASeq)
+
+# get and parse data
+data("zfGenes")
+zf <- zfGenes[grep("^ERCC", rownames(zfGenes), invert = T), ]
+zf <- as.matrix(zf)
+colData <- DataFrame(sampleID = colnames(zf), group = as.factor(c("control", "control", "control", "treatment", "treatment", "treatment")))
+
+# perform DESeq2
+dds <- DESeqDataSetFromMatrix(zf, colData, design = ~ group)
+dds <- DESeq(dds)
+
+# find differentially expressed features
+res <- results(dds)
+sigRes <- subset(res, padj <= 0.05)
+dim(sigRes)[1]
+```
