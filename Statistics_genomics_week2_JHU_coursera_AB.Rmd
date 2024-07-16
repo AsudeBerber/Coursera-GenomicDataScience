@@ -1,0 +1,360 @@
+---
+title: "Statistics_Genomics_coursera_JHU_week2"
+author: "Asude Berber"
+date: "2024-07-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+source("http://bioconductor.org/biocLite.R")
+BiocManager::install("biocLite")
+BiocManager::install("sva")
+library(limma)
+biocLite("devtools")  # only if devtools not yet installed
+library(devtools)
+library(Biobase)
+```
+##Dimension reduction 
+#Can we find patterns in matrices of data?
+
+```{r}
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/montpick_eset.RData")
+load(file=con)
+close(con)
+mp = montpick.eset
+pdata=pData(mp)
+edata=as.data.frame(exprs(mp))
+fdata = fData(mp)
+ls()
+```
+
+#calculate the singular vectors 
+```{r}
+edata = edata[rowMeans(edata) > 100, ]
+edata = log2(edata + 1)
+edata_centered = edata - rowMeans(edata)
+svd1 = svd(edata_centered)
+names(svd1)
+```
+
+```{r}
+plot(svd1$d,ylab="Singular value",col=2)
+
+# visualize the distribution of singular values obtained from the SVD. 
+#If the singular values decrease rapidly and then level off, it indicates that the first few singular values are much larger than the rest, which can be important for tasks like dimensionality reduction.
+#svd1: This is a variable that likely contains the result of a Singular Value Decomposition (SVD) operation. In R, svd1 would typically be a list containing at least three components: u, d, and v. Here, d represents the singular values from the decomposition.
+#col=2 is for red
+
+plot(svd1$d^2/sum(svd1$d^2),ylab="Percent Variance Explained",col=2)
+```
+
+```{r}
+par(mfrow=c(1,2)) #this function is for displaying multiple plots in same area, comparing two plots 
+plot(svd1$v[,1],col=2,ylab="1st PC") #variance
+plot(svd1$v[,2],col=2,ylab="2nd PC")
+
+```
+
+#A very common plot is to plot PC1 versus PC2 to see if you can see any “clusters” or “groups”.
+```{r}
+plot(svd1$v[,1],svd1$v[,2],col=2,ylab="2nd PC",xlab="1st PC")
+
+plot(svd1$v[,1],svd1$v[,2],ylab="2nd PC",
+     xlab="1st PC",col=as.numeric(pdata$study))
+```
+
+```{r}
+edata_outlier = edata_centered
+edata_outlier[1,] = edata_centered[1,] * 10000
+svd3 = svd(edata_outlier)
+par(mfrow=c(1,2))
+plot(svd1$v[,1],col=1,main="Without outlier")
+plot(svd3$v[,1],col=2,main="With outlier")
+```
+
+#It turns out the new top singular vector is perfectly correlated with the outlying gene
+```{r}
+plot(svd3$v[,1],edata_outlier[1,],col=4)
+```
+
+#Reference: https://jtleek.com/genstats/inst/doc/02_03_dimension-reduction.html 
+
+
+#Quiz questions
+```{r}
+#load the data 
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/montpick_eset.RData")
+load(file=con)
+close(con)
+mp = montpick.eset
+pdata=pData(mp)
+edata=as.data.frame(exprs(mp))
+fdata = fData(mp)
+
+#What percentage of variation is explained by the 1st principal component in the data set if you:
+
+#Do no transformations?
+pca_result = prcomp(edata, center = TRUE, scale. = TRUE)  # Standardize the data before PCA
+# Variance explained by each principal component
+pca_variance = pca_result$sdev^2
+
+# Total variance
+total_variance = sum(pca_variance)
+
+# Percentage of variance explained by the first principal component
+perc_variation_first_pc = (pca_variance[1] / total_variance) * 100
+
+# Print the result
+perc_variation_first_pc
+
+```
+
+```{r}
+#with log2 transformation 
+log_edata = log2(edata + 1)  # Apply log2 transformation
+pca_result = prcomp(log_edata, center = TRUE, scale. = TRUE)  # Standardize the data before PCA
+# Variance explained by each principal component
+pca_variance = pca_result$sdev^2
+
+# Total variance
+total_variance = sum(pca_variance)
+
+# Percentage of variance explained by the first principal component
+perc_variation_first_pc = (pca_variance[1] / total_variance) * 100
+
+# Print the result
+perc_variation_first_pc
+
+```
+
+```{r}
+#log2(data + 1) transform and subtract row means?
+log_edata = log2(edata + 1)  # Apply log2 transformation
+# Subtract the row means
+log_edata_centered = t(apply(log_edata, 1, function(x) x - mean(x)))
+pca_result = prcomp(log_edata_centered, center = FALSE, scale. = TRUE)  # Data is already centered, so set center = FALSE
+# Variance explained by each principal component
+pca_variance = pca_result$sdev^2
+
+# Total variance
+total_variance = sum(pca_variance)
+
+# Percentage of variance explained by the first principal component
+perc_variation_first_pc = (pca_variance[1] / total_variance) * 100
+
+# Print the result
+perc_variation_first_pc
+
+```
+
+## Question 2
+
+#Load the Montgomery and Pickrell eSet:
+#Perform the log2(data + 1) transform and subtract row means from the samples. Set the seed to \verb|333|333 and use k-means to cluster the samples into two clusters. Use \verb|svd|svd to calculate the singular vectors. What is the correlation between the first singular vector and the sample clustering indicator?
+
+```{r}
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/montpick_eset.RData")
+load(file=con)
+close(con)
+mp = montpick.eset
+pdata=pData(mp)
+edata=as.data.frame(exprs(mp))
+fdata = fData(mp)
+
+set.seed(1235)
+
+log_edata = log2(edata + 1)
+log_edata_row_centered = log_edata - rowMeans(log_edata)
+
+# Calculate SVD
+e_svd = svd(log_edata_row_centered)
+
+# Calculate kmeans
+e_kmeans = kmeans(t(log_edata_row_centered), centers=2)
+
+# Get correlation between 1st singular vector and cluster label
+cor.test(e_svd$v[, 1], e_kmeans$cluster)
+
+```
+
+#Question3
+```{r}
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/bodymap_eset.RData")
+load(file=con)
+close(con)
+bm = bodymap.eset
+edata = exprs(bm)
+pdata_bm=pData(bm)
+
+#Fit a linear model relating the first gene’s counts to the number of technical replicates, treating the number of replicates as a factor. Plot the data for this gene versus the covariate.
+
+# Extract the first gene's counts and number of technical replicates
+first_gene_counts <- edata[1,]
+num_replicates <- as.factor(pdata_bm$num.tech.reps)
+
+lm_fit <- lm(first_gene_counts ~ num_replicates)
+summary(lm_fit)
+
+library(ggplot2)
+plot(num_replicates, first_gene_counts,
+     xlab = "Number of technical replicates",
+     ylab = "First gene counts",
+     main = "First gene counts vs number of technical replicates")
+points(num_replicates, fitted(lm_fit), col = "red", pch = 19)
+
+ggplot(lm_fit, aes(x = num_replicates, y = first_gene_counts)) +
+  geom_point() +
+  geom_point(aes(y = fitted(lm_fit)), color = "red") +
+  labs(title = "First Gene Counts vs Number of Technical Replicates",
+       x = "Number of Technical Replicates",
+       y = "First Gene Counts")
+```
+
+
+#Question4
+```{r}
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/bodymap_eset.RData")
+load(file=con)
+close(con)
+bm = bodymap.eset
+edata = exprs(bm)
+pdata_bm=pData(bm)
+
+#Fit a linear model relating he first gene’s counts to the age of the person and the sex of the samples. What is the value and interpretation of the coefficient for age?
+
+lm_fit2 <- lm(edata[1, ] ~ pdata_bm$age + pdata_bm$gender)
+summary(lm_fit2)
+
+#This coefficient means that for each additional year of age, the count goes down by an average of 23.91 for a fixed sex.
+```
+
+#Question5
+```{r}
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/montpick_eset.RData")
+load(file=con)
+close(con)
+mp = montpick.eset
+pdata=pData(mp)
+edata=as.data.frame(exprs(mp))
+fdata = fData(mp)
+
+#Perform the log2(data + 1) transform. Then fit a regression model to each sample using population as the outcome. Do this using the 
+#lm.fit
+#lm.fit function (hint: don't forget the intercept). What is the dimension of the residual matrix, the effects matrix and the coefficients matrix?
+
+edata_log2 <- log2(edata + 1)
+population <- as.factor(pdata$population)
+
+mod = model.matrix(~ pdata$population)
+fit = lm.fit(mod, t(edata))
+
+dim(fit$residuals)
+dim(fit$effects)
+dim(fit$coefficients)
+
+?lm.fit
+```
+
+
+#Question7
+```{r}
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/bodymap_eset.RData")
+load(file=con)
+close(con)
+bm = bodymap.eset
+edata = exprs(bm)
+pdata_bm=pData(bm)
+
+
+#Fit many regression models to the expression data whereage age is the outcome variable using the  lmFit lmFit function from the  limma
+#limma package (hint: you may have to subset the expression data to the samples without missing values of age to get the model to fit). What is the coefficient for age for the 1,000th gene? Make a plot of the data and fitted values for this gene. Does the model fit well?
+
+library(limma)
+
+# subset the expression data to the samples without mimssing values of age
+pdata_bm = na.omit(pdata_bm)
+edata = edata[,rownames(pdata_bm), drop=FALSE]
+
+# fit many regression models to the expression data where age is the outcome
+mod_adj = model.matrix(~ pdata_bm$age)
+fit_limma = lmFit(edata,mod_adj)
+
+fit_limma$coefficients[1000,]
+```
+```{r}
+# make a plot of the 1,000th gene and fitted values
+intercept = fit_limma$coefficients[1000,][1]
+slope = fit_limma$coefficients[1000,][2]
+x = edata[1000,]*slope+intercept
+
+plot(x,pdata_bm$age)
+```
+
+#Question8 
+```{r}
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/bodymap_eset.RData")
+load(file=con)
+close(con)
+bm = bodymap.eset
+edata = exprs(bm)
+pdata_bm=pData(bm)
+
+#Fit many regression models to the expression data where age age is the outcome variable and tissue.type tissue.type is an adjustment variable using the lmFit lmFit function from the limma limma package (hint: you may have to subset the expression data to the samples without missing values of age to get the model to fit). What is wrong with this model?
+pdata_bm$tissue.type
+
+mod_adj = model.matrix(~ pdata_bm$tissue.type)
+fit_limma = lmFit(edata,mod_adj)
+fit_limma$coefficients[1000,]
+
+head(pdata)
+```
+#The effects are difficult to distinguish because each study only measured one population. 
+
+```{r}
+
+con =url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/bodymap_eset.RData")
+load(file=con)
+close(con)
+bm = bodymap.eset
+edata = exprs(bm)
+pdata_bm=pData(bm)
+#Set the seed using the command 
+set.seed(33353)
+#then estimate a single surrogate variable using the 
+#sva function 
+#after log2(data + 1) transforming the expression data, removing rows with rowMeans less than 1, and treating age as the outcome (hint: you may have to subset the expression data to the samples without missing values of age to get the model to fit). What is the correlation between the estimated surrogate for batch and age? Is the surrogate more highly correlated with 
+#race or gender?
+
+library(sva)
+pheno = na.omit(pdata_bm)
+edata = edata[,rownames(pheno), drop=FALSE]
+edata = log2(edata + 1)
+edata = edata[rowMeans(edata) > 1,]
+
+
+
+
+# fit a sva model
+mod = model.matrix(~age, data=pheno)
+mod0 = model.matrix(~1, data=pheno)
+sva1 = sva(edata, mod,mod0, n.sv=2)
+
+
+# correlation between surrogate for batch and age
+cor(sva1$sv, pheno$age)
+```
+```{r}
+# correlation between surrogate for batch and race
+cor(sva1$sv, as.numeric(pheno$race))
+```
+```{r}
+# correlation between surrogate for batch and gender
+cor(sva1$sv, as.numeric(pheno$gender))
+```
+```
+
+
